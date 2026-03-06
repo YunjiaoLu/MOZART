@@ -7,8 +7,9 @@
 library(data.table)
 library(matrixStats)
 library(xtable)
+library(ggplot2)
 dir_path <- "/Users/ylu/Documents/MOZART"
-###########################    Function     ###############################
+###########################    Functions     ###############################
 source("script_mozart/functions.R")
 rename_sample2 <- function(str){
 	startp <- unlist(gregexpr(".genes.results", str))
@@ -98,8 +99,8 @@ print(end_time - start_time)
 write.table(exp_rsem_tpm, 
 	"data/exp_rsem_tpm.txt",
 	row.names = FALSE)
+	
 ########## Compare Feature counts and RSEM counts ##########
-
 counts_feature <- read.table(paste0(dir_path, "/data/RNAseq/merged_feature_counts/read_counts/rawCounts.txt"),
 	header = TRUE,
 	row.names = 1)
@@ -151,6 +152,7 @@ exp_rsem <- mrna_rsem[, c(sample, "gene_symbol")]
 exp_sample_i <- merge(exp_fc, exp_rsem, by = "gene_symbol")
 colnames(exp_sample_i) <- c("gene_symbol", "exp_fc", "exp_rsem")
 coef_cor2 <- cor(exp_sample_i$exp_fc, exp_sample_i$exp_rsem, method = "pearson")
+
 pdf(paste0("/Users/ylu/Documents/MOZART/graphs/cor_counts_",sample,".pdf"), width = 12, height = 6.5)
 par(mfrow = c(1,2))
 plot(exp_sample_i$exp_fc, exp_sample_i$exp_rsem, xlim = c(0, 20000), ylim = c(0, 20000), asp=1, xlab = "featureCount", ylab = "RSEM")
@@ -161,58 +163,20 @@ plot(exp_sample_i$exp_fc, exp_sample_i$exp_rsem, asp=1, xlab = "featureCount", y
 dev.off()
 
 #####################################
-# PCA   #
+# PCA for subgroups discovery
 #####################################
 
 # Extract gene lengths
 library(rtracklayer)
 library(data.table)
 
-# gtf <- import("/Users/ylu/Documents/MOZART/data/gencode.v49lift37.basic.annotation.gtf")
-# genes <- gtf[gtf$type == "gene"]
-# dt <- as.data.table(genes)
-# gene_length <- dt[, .(
-#   gene_id = gene_id,
-#   length = end - start + 1
-# )]
-# gene_length <- unique(gene_length, by = "gene_id")
-# write.table(gene_length, "/Users/ylu/Documents/MOZART/data/gene_length.txt", row.names = FALSE)
-# 
-# df_gene_length <- read.table(
-# 	"/Users/ylu/Documents/MOZART/data/gene_length.txt",
-# 	header = TRUE
-# )
-# df_gene_length$gene_id2 <- sapply(df_gene_length$gene_id, rename_genes)
-# 
-# counts_rsem$gene_symbol[is.element(counts_rsem$gene_symbol, df_gene_length$gene_id2)]
-# 
-# # Calculate TPM from raw count
-# df_gene_length$length_kb <- df_gene_length$length / 1000
-# # Ensure order matches
-# counts_rsem <- merge(counts_rsem, df_gene_length[, c("length_kb", "gene_id2")], by.x = "gene_symbol", by.y = "gene_id2", all = FALSE)
-# 
-# gene_length_kb <- counts_rsem$length_kb
-# # TPM calculation
-# tpm_rsem <- apply(subset(counts_rsem, select = -c(gene_symbol, length_kb)), 2, function(x) {
-#   rate <- x / gene_length_kb
-#   rate / sum(rate) * 1e6
-# })
-# 
-# # tpm_rsem <- data.frame(tpm_rsem, counts_rsem$gene_symbol)
-
-
-
-# PCA for subgroups discovary
+# log2 transformation to stablize variance
 log_tpm_rsem <- log2(subset(exp_rsem_tpm, select = -c(gene_id, gene_name)) + 0.01)
 gene_var <- rowVars(as.matrix(log_tpm_rsem))
 df_log_tpm_rsem <- data.frame(log_tpm_rsem, exp_rsem_tpm$gene_name)
 # Use top 500–2000 most variable genes
 top_genes <- order(gene_var, decreasing = TRUE)[1:20000]
-
-
 log_tpm_rsem_top <- log_tpm_rsem[top_genes, ]
-
-
 
 pca <- prcomp(t(log_tpm_rsem_top), 
 	center = TRUE, 
@@ -223,8 +187,6 @@ pca_df <- data.frame(
   PC1 = pca$x[, 1],
   PC2 = pca$x[, 2]
 )
-
-library(ggplot2)
 
 
 pdf("/Users/ylu/Documents/MOZART/graphs/pca.pdf")
@@ -261,11 +223,7 @@ exp_rsem_tpm <- read.table("data/exp_rsem_tpm.txt",
 exp_rsem_tpm2 <- subset(exp_rsem_tpm, select = -c(gene_id))
 exp_rsem_tpm2 <- as.data.table(exp_rsem_tpm2)
 exp_rsem_tpm2 <- exp_rsem_tpm2[, lapply(.SD, sum), by = gene_name]
-# The same gene (with the same name0) on X and Y has different gene ID..
-#  [1] "AKAP17A" "ASMT"    "ASMTL"   "C4orf36" "CD99"    "CRLF2"   "CSF2RA" 
-#  [8] "DHRSX"   "DUSP13B" "FAM174C" "GTPBP6"  "HERC3"   "IL3RA"   "IL9R"   
-# [15] "KYAT1"   "P2RY8"   "PDE4C"   "PDE8B"   "PINX1"   "PLCXD1"  "POLR2J3"
-# [22] "PPP2R3B" "SHOX"    "SLC25A6" "VAMP7"   "WASH6P"  "ZBED1"  
+
 exp_rsem_tpm2 <- as.data.frame(exp_rsem_tpm2)
 rownames(exp_rsem_tpm2) <- exp_rsem_tpm2$gene_name
 exp_rsem_tpm2 <- subset(exp_rsem_tpm2, select = -gene_name)
@@ -292,9 +250,9 @@ sel_paths <- sel_paths[!is.element(sel_paths, repeted_paths)]
 list_genesset <- lapply(sel_paths, function(x) {return(gene_sets$gene[gene_sets$term == x])})
 names(list_genesset) <- sel_paths
 
-
-
+# Calculate the ssGSEA score
 res <- ssgsea(log_tpm_rsem, list_genesset, scale = TRUE, norm = FALSE)
+res2 <- ssgsea2(log_tpm_rsem, list_genesset, scale = TRUE, norm = FALSE)
 #zscore the ssgsea output for comparative analysis
 mat = (res - rowMeans(res))/(rowSds(as.matrix(res)))[row(res)]
 pdf("graphs/ssgsea.pdf", width = 20, height = 10)
@@ -334,3 +292,4 @@ res <- oppar::gsva(expr = log_tpm_rsem,
      min.sz = 1,
      tau = 0.25)$es.obs
 
+# 
