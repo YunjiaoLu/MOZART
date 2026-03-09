@@ -250,7 +250,7 @@ sel_paths <- sel_paths[!is.element(sel_paths, repeted_paths)]
 list_genesset <- lapply(sel_paths, function(x) {return(gene_sets$gene[gene_sets$term == x])})
 names(list_genesset) <- sel_paths
 
-# Calculate the ssGSEA score
+########## Calculate the ssGSEA score #############
 res <- ssgsea(log_tpm_rsem, list_genesset, scale = TRUE, norm = FALSE)
 res2 <- ssgsea2(log_tpm_rsem, list_genesset, scale = TRUE, norm = FALSE)
 #zscore the ssgsea output for comparative analysis
@@ -282,14 +282,11 @@ res = run_ssGSEA2("/tmp/PI3K_pert_logP_n2x23936.gct",
                   extended.output = TRUE, 
                   global.fdr = FALSE,
                   log.file = "/tmp/run.log")
-
-# package GSVA
-res <- oppar::gsva(expr = log_tpm_rsem,
-     gset.idx.list = ex_genes_set,
-     mx.diff = FALSE, method = "ssgsea", 
-     verbose = TRUE,
-     ssgsea.norm = FALSE,
-     min.sz = 1,
-     tau = 0.25)$es.obs
-
-# 
+########## Calculate the GSVA score #############
+ES_GSVA_max <- GSVA::gsva(gsvaParam(log_tpm_rsem, list_genesset, verbose=FALSE))
+ES_GSVA_z <- (ES_GSVA_max - rowMeans(ES_GSVA_max))/(rowSds(as.matrix(ES_GSVA_max)))[row(ES_GSVA_max)]
+pdf("graphs/gsva.pdf", width = 20, height = 10)
+Heatmap(ES_GSVA_z, col = colorRamp2(c(-2,0,2), c("orangered", "white", "purple")),
+	 row_names_gp = gpar(fontsize = 6),
+	 column_names_gp = gpar(fontsize = 10))
+dev.off()
