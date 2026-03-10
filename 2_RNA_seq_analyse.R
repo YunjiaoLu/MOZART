@@ -11,6 +11,9 @@ library(ggplot2)
 dir_path <- "/Users/ylu/Documents/MOZART"
 ###########################    Functions     ###############################
 source("script_mozart/functions.R")
+source("/Users/ylu/RPackages/GSVA-devel/R/gsva.R")
+source("/Users/ylu/RPackages/GSVA-devel/R/ssgsea.R")
+source("/Users/ylu/RPackages/GSVA-devel/R/ssgseaParam.R")
 rename_sample2 <- function(str){
 	startp <- unlist(gregexpr(".genes.results", str))
 	new_name <- substr(str, 1, startp - 1)
@@ -282,11 +285,32 @@ res = run_ssGSEA2("/tmp/PI3K_pert_logP_n2x23936.gct",
                   extended.output = TRUE, 
                   global.fdr = FALSE,
                   log.file = "/tmp/run.log")
+ssgsea_param <- ssgseaParam(log_tpm_rsem, list_genesset, verbose=FALSE, alpha = 0.25)
+ES_ssgsea <- GSVA::gsva(ssgsea_param)
+
+ES_ssgsea <- GSVA::gsva(log_tpm_rsem, list_genesset, verbose=FALSE, alpha = 0.25)
+
+ES_ssgsea_z = (ES_ssgsea - rowMeans(ES_ssgsea))/(rowSds(as.matrix(ES_ssgsea)))[row(ES_ssgsea)]
+pdf("graphs/ssgsea_gsva.pdf", width = 20, height = 10)
+Heatmap(ES_ssgsea_z, col = colorRamp2(c(-2,0,2), c("orangered", "white", "purple")),
+	 row_names_gp = gpar(fontsize = 6),
+	 column_names_gp = gpar(fontsize = 10))
+dev.off()
 ########## Calculate the GSVA score #############
-ES_GSVA_max <- GSVA::gsva(gsvaParam(log_tpm_rsem, list_genesset, verbose=FALSE))
+gsva_param <- gsvaParam(log_tpm_rsem, list_genesset, verbose=FALSE, maxDiff = TRUE, kcdf = "Gaussian")
+ES_GSVA_max <- GSVA::gsva(gsva_param)
 ES_GSVA_z <- (ES_GSVA_max - rowMeans(ES_GSVA_max))/(rowSds(as.matrix(ES_GSVA_max)))[row(ES_GSVA_max)]
 pdf("graphs/gsva.pdf", width = 20, height = 10)
 Heatmap(ES_GSVA_z, col = colorRamp2(c(-2,0,2), c("orangered", "white", "purple")),
 	 row_names_gp = gpar(fontsize = 6),
 	 column_names_gp = gpar(fontsize = 10))
 dev.off()
+
+X = log_tpm_rsem
+geneSets =list_genesset
+alpha=0.25
+normalization=TRUE
+check_na=FALSE
+any_na=FALSE
+verbose=TRUE
+na_use="na.rm"
