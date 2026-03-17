@@ -11,9 +11,9 @@ library(ggplot2)
 dir_path <- "/Users/ylu/Documents/MOZART"
 ###########################    Functions     ###############################
 source("script_mozart/functions.R")
-source("/Users/ylu/RPackages/GSVA-devel/R/gsva.R")
-source("/Users/ylu/RPackages/GSVA-devel/R/ssgsea.R")
-source("/Users/ylu/RPackages/GSVA-devel/R/ssgseaParam.R")
+# source("/Users/ylu/RPackages/GSVA-devel/R/gsva.R") 
+# source("/Users/ylu/RPackages/GSVA-devel/R/ssgsea.R")
+# source("/Users/ylu/RPackages/GSVA-devel/R/ssgseaParam.R")
 rename_sample2 <- function(str){
 	startp <- unlist(gregexpr(".genes.results", str))
 	new_name <- substr(str, 1, startp - 1)
@@ -29,6 +29,26 @@ rename_genes <- function(str){
 	startp <- unlist(gregexpr("_", trimws(str)))
 	new_name <- substr(str, 1, startp[1] - 1)
 	return(new_name)
+}
+tidy_exp_data <- function(exp_data){ 
+	# Combine rows where one gene name corresponding to two gene ID;
+	# Return expression matrix with rownames as gene names
+	exp_data2 <- subset(exp_data, select = -c(gene_id))
+	exp_data2 <- as.data.table(exp_data2)
+	exp_data2 <- exp_data2[, lapply(.SD, sum), by = gene_name]
+	# These genes have two IDs
+	#  [1] "AKAP17A" "ASMT"    "ASMTL"   "C4orf36" "CD99"    "CRLF2"   "CSF2RA" 
+	#  [8] "DHRSX"   "DUSP13B" "FAM174C" "GTPBP6"  "HERC3"   "IL3RA"   "IL9R"   
+	# [15] "KYAT1"   "P2RY8"   "PDE4C"   "PDE8B"   "PINX1"   "PLCXD1"  "POLR2J3"
+	# [22] "PPP2R3B" "SHOX"    "SLC25A6" "VAMP7"   "WASH6P"  "ZBED1" 
+	
+	# > exp_data$gene_id[exp_data$gene_name == "AKAP17A"]
+	# [1] "ENSG00000197976.13" "ENSG00000292343.2" 
+	
+	exp_data2 <- as.data.frame(exp_data2)
+	rownames(exp_data2) <- exp_data2$gene_name
+	exp_data2 <- subset(exp_data2, select = -gene_name)
+	return(exp_data2)
 }
 ########################### Read Raw Counts ###############################
 files_samples <- list.files(paste0(dir_path, "/data/RNAseq/merged_feature_counts/"))
@@ -84,8 +104,7 @@ genes_read[test[, 1]-test[,2]>0.5,]
 test[test[, 1]-test[,2]>0.5,]
 
 
-# merge TPM all patients
-
+# merge TPM of all patients
 exp_rsem_tpm <- ref_genes2[!is.element(ref_genes2$gene_name, c("LIMCH1", "A1BG", "ENSG00000255330")),]
 # It takes 3-4 minutes to run the following block of code
 start_time <- Sys.time()
@@ -102,7 +121,42 @@ print(end_time - start_time)
 write.table(exp_rsem_tpm, 
 	"data/exp_rsem_tpm.txt",
 	row.names = FALSE)
-	
+
+# merge FPKM of all patients
+exp_rsem_fpkm <- ref_genes2[!is.element(ref_genes2$gene_name, c("LIMCH1", "A1BG", "ENSG00000255330")),]
+# It takes 3-4 minutes to run the following block of code
+start_time <- Sys.time()
+for (file in files_names){
+	samp <- rename_sample2(file)
+	genes_count_samp_i <- read.table(file = paste0(dir_path,  "/data/RNAseq/merged_feature_counts/", file),
+		header = TRUE)
+	genes_count_samp_i$gene_id <- sapply(genes_count_samp_i$gene_id, rename_genes)
+	exp_rsem_fpkm <- merge(exp_rsem_fpkm, genes_count_samp_i[, c("gene_id", "FPKM")], by="gene_id", all.x=TRUE)
+	colnames(exp_rsem_fpkm)[dim(exp_rsem_fpkm)[2]] <- samp
+}
+end_time <- Sys.time()
+print(end_time - start_time)
+write.table(exp_rsem_fpkm, 
+	"data/exp_rsem_fpkm.txt",
+	row.names = FALSE)
+
+# merge raw count of all patients
+exp_count <- ref_genes2[!is.element(ref_genes2$gene_name, c("LIMCH1", "A1BG", "ENSG00000255330")),]
+# It takes 3-4 minutes to run the following block of code
+start_time <- Sys.time()
+for (file in files_names){
+	samp <- rename_sample2(file)
+	genes_count_samp_i <- read.table(file = paste0(dir_path,  "/data/RNAseq/merged_feature_counts/", file),
+		header = TRUE)
+	genes_count_samp_i$gene_id <- sapply(genes_count_samp_i$gene_id, rename_genes)
+	exp_count <- merge(exp_count, genes_count_samp_i[, c("gene_id", "expected_count")], by="gene_id", all.x=TRUE)
+	colnames(exp_count)[dim(exp_count)[2]] <- samp
+}
+end_time <- Sys.time()
+print(end_time - start_time)
+write.table(exp_count, 
+	"data/exp_count.txt",
+	row.names = FALSE)
 ########## Compare Feature counts and RSEM counts ##########
 counts_feature <- read.table(paste0(dir_path, "/data/RNAseq/merged_feature_counts/read_counts/rawCounts.txt"),
 	header = TRUE,
@@ -210,6 +264,137 @@ ggplot(pca_df, aes(PC1, PC2)) +
     )
   )
 dev.off()
+##########################################################################
+#
+# Comparison of combinations of normalization and transformation methods #
+#
+##########################################################################
+library(edgeR)
+library(DESeq2)
+meth_within_sample_norm <- c("none", "tpm", "fpkm")
+meth_bet_sample_norm <- c("none", "tmm", "rle")
+meth_transf <- c("none", "asinh")
+for (i in meth_within_sample_norm){
+	if (i == "none") {
+		exp_data <- read.table(
+			"data/exp_count.txt",
+			header = TRUE
+		)
+		exp_mat <- tidy_exp_data(exp_data)
+		assign(paste0("exp_", i), exp_mat)	
+	}else if(i == "tpm"){
+		exp_data <- read.table(
+			"data/exp_rsem_tpm.txt",
+			header = TRUE
+		)
+		exp_mat <- tidy_exp_data(exp_data)
+		assign(paste0("exp_", i), exp_mat)	
+	}else if(i == "fpkm"){
+		exp_data <- read.table(
+			"data/exp_rsem_fpkm.txt",
+			header = TRUE
+		)
+		exp_mat <- tidy_exp_data(exp_data)
+		assign(paste0("exp_", i), exp_mat)	
+	}
+	for (j in meth_bet_sample_norm){
+		if (j == "none") {
+			assign(paste0("exp_", i, "_", j), get(paste0("exp_", i)))	
+		}else if(j == "tmm"){
+			# TMM edgeR
+			exp_tmm <- calcNormFactors(get(paste0("exp_", i)), method = c("TMM"))
+			assign(paste0("exp_", i, "_", j), exp_tmm)
+		}else if(j == "rle"){
+			# RLE edgeR
+			exp_rle <- calcNormFactors(get(paste0("exp_", i)), method = c("RLE"))
+			assign(paste0("exp_", i, "_", j), exp_rle)
+		}
+		for (k in meth_transf){
+			if (k == "none") {
+				assign(paste0("exp_", i, "_", j, "_", k), get(paste0("exp_", i, "_", j)))	
+			}else if(k == "vst"){
+				exp_vst <- varianceStabilizingTransformation(
+					as.matrix(get(paste0("exp_", i, "_", j))), 
+					blind = TRUE, 
+					fitType = "parametric"
+				)
+				assign(paste0("exp_", i, "_", j, "_", k), exp_vst)
+			}else if(k == "rlog"){
+				exp_rlog <- rlogTransformation(
+					as.matrix(get(paste0("exp_", i, "_", j))),
+					blind = TRUE,
+					intercept,
+					betaPriorVar,
+					fitType = "parametric"
+				)
+				assign(paste0("exp_", i, "_", j, "_", k), exp_rlog)
+			}else if(k == "asinh"){
+				exp_asinh <- log(get(paste0("exp_", i, "_", j)) + sqrt(get(paste0("exp_", i, "_", j))^2+1))
+				assign(paste0("exp_", i, "_", j, "_", k), exp_asinh)
+			}
+			write.table(get(paste0("exp_", i, "_", j, "_", k)),
+				paste0("data/comp_norm_trans/exp_", i, "_", j, "_", k, ".txt")
+			)
+		}
+	}
+}
+     dds <- makeExampleDESeqDataSet(m=6,betaSD=1)
+     rld <- rlog(dds)
+     dists <- dist(t(assay(rld)))
+     # plot(hclust(dists))
+     
+exp_data <- read.table(
+	"data/exp_count.txt",
+	header = TRUE
+)
+exp_mat1 <- tidy_exp_data(exp_data)
+exp_mat <- apply(exp_mat1, 2, as.integer)
+rownames(exp_mat) <- rownames(exp_mat1)
+
+meth_transf <- c("vst")
+for (k in meth_transf){
+	if(k == "vst"){
+		exp_vst <- varianceStabilizingTransformation(
+			exp_mat, 
+			blind = TRUE, 
+			fitType = "parametric"
+		)
+		assign(paste0("exp_none_none_", k), exp_vst)
+	}else if(k == "rlog"){
+		exp_rlog <- rlogTransformation(
+			exp_mat,
+			blind = TRUE,
+			intercept,
+			betaPriorVar,
+			fitType = "parametric"
+		)
+		assign(paste0("exp_none_none_", k), exp_rlog)
+	}
+	write.table(get(paste0("exp_none_none_", k)),
+		paste0("data/comp_norm_trans/exp_none_none_", k, ".txt")
+	)
+}
+
+########### Transformation ##############
+# hyperbolic arcsine (asinh)
+exp_mat <- subset(exp_rsem_tpm, select = -c(gene_id, gene_name))
+exp_tpm_asinh <- log(exp_mat + sqrt(exp_mat^2+1))
+
+# VST
+exp_vst <- varianceStabilizingTransformation(
+	object, 
+	blind = TRUE, 
+	fitType = "parametric"
+)
+# rlog
+exp_rlog <- rlogTransformation(
+	object,
+	blind = TRUE,
+	intercept,
+	betaPriorVar,
+	fitType = "parametric"
+)
+
 
 ########### ssGSEA ##############
 library(matrixStats)
@@ -223,13 +408,8 @@ exp_rsem_tpm <- read.table("data/exp_rsem_tpm.txt",
 	header = TRUE,
 	stringsAsFactors = FALSE)
 
-exp_rsem_tpm2 <- subset(exp_rsem_tpm, select = -c(gene_id))
-exp_rsem_tpm2 <- as.data.table(exp_rsem_tpm2)
-exp_rsem_tpm2 <- exp_rsem_tpm2[, lapply(.SD, sum), by = gene_name]
 
-exp_rsem_tpm2 <- as.data.frame(exp_rsem_tpm2)
-rownames(exp_rsem_tpm2) <- exp_rsem_tpm2$gene_name
-exp_rsem_tpm2 <- subset(exp_rsem_tpm2, select = -gene_name)
+
 log_tpm_rsem <- as.matrix(log2(exp_rsem_tpm2 + 0.01))
 
 gmt_file <- "data/ReactomePathways.gmt" #2830 pathways
@@ -254,44 +434,13 @@ list_genesset <- lapply(sel_paths, function(x) {return(gene_sets$gene[gene_sets$
 names(list_genesset) <- sel_paths
 
 ########## Calculate the ssGSEA score #############
-res <- ssgsea(log_tpm_rsem, list_genesset, scale = TRUE, norm = FALSE)
-res2 <- ssgsea2(log_tpm_rsem, list_genesset, scale = TRUE, norm = FALSE)
-#zscore the ssgsea output for comparative analysis
-mat = (res - rowMeans(res))/(rowSds(as.matrix(res)))[row(res)]
-pdf("graphs/ssgsea.pdf", width = 20, height = 10)
-Heatmap(mat, col = colorRamp2(c(-2,0,2), c("orangered", "white", "purple")),
-	 row_names_gp = gpar(fontsize = 6),
-	 column_names_gp = gpar(fontsize = 10))
-dev.off()
-# package ssGSEA2
-download.file(url = "https://raw.githubusercontent.com/nicolerg/ssGSEA2/master/example/PI3K_pert_logP_n2x23936.gct",
-              destfile = "/tmp/PI3K_pert_logP_n2x23936.gct")
-
-# Download gene set database 
-download.file(url = "https://raw.githubusercontent.com/nicolerg/ssGSEA2/master/example/ptm.sig.db.all.flanking.human.v1.8.1.gmt",
-              destfile = "/tmp/ptm.sig.db.all.flanking.human.v1.8.1.gmt")
-
-res = run_ssGSEA2("/tmp/PI3K_pert_logP_n2x23936.gct",
-                  output.prefix = "example",
-                  gene.set.databases = "/tmp/ptm.sig.db.all.flanking.human.v1.8.1.gmt",
-                  output.directory = "/tmp",
-                  sample.norm.type = "none", 
-                  weight = 0.75, 
-                  correl.type = "rank", 
-                  statistic = "area.under.RES",
-                  output.score.type = "NES", 
-                  nperm = 1000, 
-                  min.overlap = 5, 
-                  extended.output = TRUE, 
-                  global.fdr = FALSE,
-                  log.file = "/tmp/run.log")
 ssgsea_param <- ssgseaParam(log_tpm_rsem, list_genesset, verbose=FALSE, alpha = 0.25)
 ES_ssgsea <- GSVA::gsva(ssgsea_param)
 
 ES_ssgsea <- GSVA::gsva(log_tpm_rsem, list_genesset, verbose=FALSE, alpha = 0.25)
 
 ES_ssgsea_z = (ES_ssgsea - rowMeans(ES_ssgsea))/(rowSds(as.matrix(ES_ssgsea)))[row(ES_ssgsea)]
-pdf("graphs/ssgsea_gsva.pdf", width = 20, height = 10)
+pdf("graphs/ssgsea.pdf", width = 20, height = 10)
 Heatmap(ES_ssgsea_z, col = colorRamp2(c(-2,0,2), c("orangered", "white", "purple")),
 	 row_names_gp = gpar(fontsize = 6),
 	 column_names_gp = gpar(fontsize = 10))
@@ -306,11 +455,6 @@ Heatmap(ES_GSVA_z, col = colorRamp2(c(-2,0,2), c("orangered", "white", "purple")
 	 column_names_gp = gpar(fontsize = 10))
 dev.off()
 
-X = log_tpm_rsem
-geneSets =list_genesset
-alpha=0.25
-normalization=TRUE
-check_na=FALSE
-any_na=FALSE
-verbose=TRUE
-na_use="na.rm"
+# Visualize distributions in R (by column or by row??) violon plot
+# Use matrix norm or distance of singular values to measure the distance between matrices
+
